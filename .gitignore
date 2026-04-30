@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+
+# Données (volumineuses, non versionnées)
+data/raw/
+data/frames_hr/
+data/frames_lr/
+
+# Poids des modèles
+train/*.pth
+train/*.pt
+
+# Résultats générés
+benchmark/results/*.csv
+benchmark/results/*.png
+benchmark/results/*.jpg
+
+# Jupyter
+.ipynb_checkpoints/
+
+# macOS
+.DS_Store
+
+# CodeCarbon
+emissions.csv

@@ -1,0 +1,13 @@
+numpy
+opencv-python
+scikit-image
+scikit-learn
+torch
+torchvision
+Pillow
+matplotlib
+pandas
+codecarbon
+pywavelets
+bm3d
+tqdm
