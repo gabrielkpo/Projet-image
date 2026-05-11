@@ -25,3 +25,9 @@ DEVICE = "cpu"            # "cpu" ou "cuda"
 
 # CodeCarbon
 COUNTRY_ISO = "FRA"
+
+# Vidéo source
+VIDEO_URL1   = "https://www.youtube.com/watch?v=DGbwtVtthu8"
+VIDEO_URL2  = "https://www.youtube.com/watch?v=33mqqm4QlJ8"
+EXTRACT_FPS = 1   # 1 frame/seconde (0 = FPS natif de la vidéo)
+

@@ -1,31 +1,98 @@
-"""Extraction de frames depuis une vidéo via ffmpeg."""
+"""Extraction de frames depuis une vidéo via ffmpeg + téléchargement yt-dlp.
+
+
+Pour lancer le code : 
+
+1. cd "/Users/gabriel/Desktop/ENSEEIHT/2A/traitement d'image/Projet_image_Gab_Thomas/green_sr"
+2. python pipeline/extract_frames.py
+
+"""
+
+
+import argparse
 import subprocess
 import sys
+import re
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from config import RAW_DIR, FRAMES_HR_DIR
+from config import RAW_DIR, FRAMES_HR_DIR, EXTRACT_FPS, VIDEO_URL2
 
 
-def extract_frames(video_path: Path, output_dir: Path, fps: int = 1) -> int:
-    output_dir.mkdir(parents=True, exist_ok=True)
-    pattern = output_dir / "frame_%05d.png"
+def download_video(url: str) -> Path:
+    video_id = _parse_video_id(url)
+    output_path = RAW_DIR / f"{video_id}.mp4"
+
+    if output_path.exists():
+        print(f"[download] Déjà présent : {output_path} — ignoré.")
+        return output_path
+
+    RAW_DIR.mkdir(parents=True, exist_ok=True)
+    print(f"[download] Téléchargement de {url} ...")
     cmd = [
-        "ffmpeg", "-i", str(video_path),
-        "-vf", f"fps={fps}",
-        "-q:v", "1",
-        str(pattern),
-        "-y",
+        "yt-dlp",
+        "--format", "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best",
+        "--merge-output-format", "mp4",
+        "--output", str(RAW_DIR / f"{video_id}.%(ext)s"),
+        "--no-playlist",
+        url,
     ]
+    result = subprocess.run(cmd)
+    if result.returncode != 0:
+        raise RuntimeError(f"yt-dlp a échoué pour : {url}")
+
+    candidates = list(RAW_DIR.glob(f"{video_id}.*"))
+    if not candidates:
+        raise FileNotFoundError(f"Aucun fichier trouvé après téléchargement ({video_id})")
+    downloaded = candidates[0]
+    if downloaded.suffix != ".mp4":
+        downloaded = downloaded.rename(output_path)
+    print(f"[download] OK — {downloaded}  ({downloaded.stat().st_size / 1e6:.1f} Mo)")
+    return downloaded
+
+
+def _parse_video_id(url: str) -> str:
+    for pattern in (r"v=([a-zA-Z0-9_-]{11})", r"youtu\.be/([a-zA-Z0-9_-]{11})"):
+        match = re.search(pattern, url)
+        if match:
+            return match.group(1)
+    return re.sub(r"[^\w]", "_", url)[-20:]
+
+
+def extract_frames(video_path: Path, output_dir: Path,
+                   fps: int = EXTRACT_FPS, max_frames: int = None) -> int:
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    existing = list(output_dir.glob("frame_*.png"))
+    if existing:
+        print(f"[extract_frames] {len(existing)} frames déjà présentes — ignoré.")
+        return len(existing)
+
+    pattern = output_dir / "frame_%05d.png"
+    cmd = ["ffmpeg", "-i", str(video_path)]
+    if fps and fps > 0:
+        cmd += ["-vf", f"fps={fps}"]
+    cmd += ["-pix_fmt", "rgb24", "-q:v", "1"]
+    if max_frames:
+        cmd += ["-frames:v", str(max_frames)]
+    cmd += [str(pattern), "-y"]
+
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         raise RuntimeError(f"ffmpeg error:\n{result.stderr}")
+
     frames = list(output_dir.glob("frame_*.png"))
-    print(f"[extract_frames] {len(frames)} frames extraites dans {output_dir}")
+    print(f"[extract_frames] {len(frames)} frames extraites → {output_dir}")
     return len(frames)
 
 
 if __name__ == "__main__":
-    for video in RAW_DIR.glob("*.mp4"):
-        out = FRAMES_HR_DIR / video.stem
-        extract_frames(video, out, fps=1)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--url", default=VIDEO_URL2,
+                        help="URL YouTube (défaut : VIDEO_URL dans config.py)")
+    parser.add_argument("--fps", type=int, default=EXTRACT_FPS)
+    parser.add_argument("--max_frames", type=int, default=None)
+    args = parser.parse_args()
+
+    video = download_video(args.url)
+    extract_frames(video, FRAMES_HR_DIR / video.stem, fps=args.fps, max_frames=args.max_frames)
