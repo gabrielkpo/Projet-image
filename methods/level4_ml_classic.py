@@ -15,37 +15,50 @@ def _to_gray(img: np.ndarray) -> np.ndarray:
     return cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
 
 
-def _sobel_features(patch: np.ndarray) -> np.ndarray:
-    """Gradients Sobel (Gx, Gy) aplatis et normalisés — descripteur d'un patch LR."""
-    p  = patch.astype(np.float32)
-    gx = cv2.Sobel(p, cv2.CV_32F, 1, 0, ksize=3)
-    gy = cv2.Sobel(p, cv2.CV_32F, 0, 1, ksize=3)
-    feat = np.concatenate([gx.flatten(), gy.flatten()])
-    norm = np.linalg.norm(feat)
-    return feat / norm if norm > 1e-8 else feat
+def _lr_features(patch: np.ndarray) -> np.ndarray:
+    """
+    Features brutes du patch LR : pixels normalisés, moyenne soustraite.
+
+    Plus robuste que Sobel quand les données d'entraînement sont peu diversifiées
+    (quelques frames d'une seule vidéo). Avec DIV2K on peut revenir aux Sobel.
+    """
+    flat = patch.astype(np.float32).flatten() / 255.0
+    return flat - flat.mean()
 
 
 def _extract_pairs(lr_gray: np.ndarray, hr_gray: np.ndarray,
                    patch_size: int, stride: int, scale: int
                    ) -> tuple[np.ndarray, np.ndarray]:
     """
-    Extrait les paires (descripteurs Sobel LR, pixels HR normalisés [0,1]).
+    Extrait les paires (features LR, résidu HR).
 
-    Chaque patch LR de taille patch_size×patch_size est associé au patch HR
-    correspondant de taille (patch_size·scale)×(patch_size·scale).
+    Résidu HR = HR_patch - bicubique(LR_patch) : haute fréquence à apprendre.
+    Garantie : patch homogène → features ≈ 0 → α ≈ 0 → sortie = bicubique.
     """
     h, w = lr_gray.shape
-    lr_feats, hr_patches = [], []
+    lr_feats, hr_residuals = [], []
 
     for y in range(0, h - patch_size + 1, stride):
         for x in range(0, w - patch_size + 1, stride):
             lr_patch = lr_gray[y:y + patch_size, x:x + patch_size]
             hr_patch = hr_gray[y * scale:(y + patch_size) * scale,
                                 x * scale:(x + patch_size) * scale]
-            lr_feats.append(_sobel_features(lr_patch))
-            hr_patches.append(hr_patch.flatten().astype(np.float32) / 255.0)
 
-    return np.array(lr_feats, dtype=np.float32), np.array(hr_patches, dtype=np.float32)
+            # Patch HR 8×8 aligné sur l'origine du patch LR (ratio 1:1)
+            hr_patch = hr_gray[y * scale : y * scale + patch_size,
+                                x * scale : x * scale + patch_size]
+
+            # Baseline bicubique à l'origine pour calculer le résidu
+            lr_up      = cv2.resize(lr_patch.astype(np.float32),
+                                    (patch_size * scale, patch_size * scale),
+                                    interpolation=cv2.INTER_CUBIC)
+            bic_center = lr_up[0:patch_size, 0:patch_size]
+            residual   = (hr_patch.astype(np.float32) - bic_center) / 128.0
+
+            lr_feats.append(_lr_features(lr_patch))
+            hr_residuals.append(residual.flatten())
+
+    return np.array(lr_feats, dtype=np.float32), np.array(hr_residuals, dtype=np.float32)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -56,24 +69,27 @@ class SparseSR:
     """
     Super-résolution par sparse coding avec dictionnaires couplés DLR et DHR.
 
-    Hypothèse centrale (Yang et al., 2010) :
-        pLR ≈ DLR · α    (descripteurs Sobel du patch LR)
-        pHR ≈ DHR · α    (pixels du patch HR, même code parcimonieux α)
+    Formulation résidu (Yang et al., 2010) :
+        DLR apprend les descripteurs Sobel des patches LR
+        DHR apprend les résidus haute-fréquence  HR - bicubique(LR)
 
-    Apprentissage (ODL, Mairal et al. 2010) :
-        1. Extraction des descripteurs Sobel LR et des pixels HR
-        2. DLR appris par MiniBatchDictionaryLearning (Online Dictionary Learning)
-        3. Calcul des codes α via OMP sur DLR
-        4. DHR appris par moindres carrés : DHR = X_hr · pinv(A)
+    Garantie : si le patch est lisse (Sobel ≈ 0), α ≈ 0 et la sortie
+    est égale au bicubique — degradation gracieuse assurée.
 
-    Inférence patch par patch :
-        α* = OMP(DLR, features_LR)
-        p̂HR = DHR · α*
+    Apprentissage :
+        1. Extraction des descripteurs Sobel LR et des résidus HR
+        2. DLR appris par MiniBatchDictionaryLearning (ODL)
+        3. Codes α calculés par OMP sur DLR
+        4. DHR appris par moindres carrés : DHR = X_residus · pinv(A)
+
+    Inférence :
+        α* = OMP(DLR, sobel(LR_patch))
+        SR = bicubique(LR) + DHR · α*  (résidu ajouté à la baseline)
     """
 
     def __init__(self, n_atoms: int = 256, patch_size: int = 8,
                  stride_train: int = 4, stride_infer: int = 2,
-                 n_nonzero: int = 10, scale: int = 4,
+                 n_nonzero: int = 3, scale: int = 4,
                  max_patches: int = 60_000):
         self.n_atoms      = n_atoms
         self.patch_size   = patch_size
@@ -82,57 +98,63 @@ class SparseSR:
         self.n_nonzero    = n_nonzero
         self.scale        = scale
         self.max_patches  = max_patches
-        self.D_lr = None  # (n_atoms, d_lr)  — convention sklearn (atoms en lignes)
+        self.D_lr = None  # (n_atoms, d_lr)  — convention sklearn
         self.D_hr = None  # (d_hr,   n_atoms)
 
-    # ── Étape 1+2+3+4 : entraînement ─────────────────────────────────────────
+    # ── Entraînement ─────────────────────────────────────────────────────────
 
     def fit(self, lr_imgs: list, hr_imgs: list) -> "SparseSR":
         """Apprend DLR et DHR à partir de paires d'images (LR, HR)."""
 
-        # Étape 1 — Extraction des patches LR (Sobel) et HR (pixels)
+        # Étape 1 — Extraction des descripteurs LR et résidus HR
+        # Arrêt anticipé dès que max_patches est atteint pour éviter l'OOM
         print(f"[SparseSR] Extraction des patches ({len(lr_imgs)} images)…")
         all_lr, all_hr = [], []
+        total = 0
         for lr, hr in zip(lr_imgs, hr_imgs):
-            lf, hp = _extract_pairs(
+            lf, hr_res = _extract_pairs(
                 _to_gray(lr), _to_gray(hr),
                 self.patch_size, self.stride_train, self.scale,
             )
             all_lr.append(lf)
-            all_hr.append(hp)
+            all_hr.append(hr_res)
+            total += len(lf)
+            if total >= self.max_patches:
+                break
 
-        X_lr = np.vstack(all_lr)   # (N, d_lr)
-        X_hr = np.vstack(all_hr)   # (N, d_hr)
-
-        # Sous-échantillonnage si le dataset dépasse la limite mémoire
-        if len(X_lr) > self.max_patches:
-            idx  = np.random.default_rng(42).choice(len(X_lr), self.max_patches, replace=False)
-            X_lr = X_lr[idx]
-            X_hr = X_hr[idx]
+        X_lr  = np.vstack(all_lr)[:self.max_patches]
+        X_res = np.vstack(all_hr)[:self.max_patches]
 
         print(f"[SparseSR] {len(X_lr):,} patches — apprentissage DLR (ODL)…")
 
-        # Étape 2 — Online Dictionary Learning sur les descripteurs LR
+        # Étape 2 — ODL sur les descripteurs Sobel LR
         odl = MiniBatchDictionaryLearning(
             n_components=self.n_atoms,
+            alpha=1.0,
             transform_algorithm="omp",
             transform_n_nonzero_coefs=self.n_nonzero,
-            max_iter=500,
-            batch_size=256,
+            max_iter=1000,
+            batch_size=64,
             random_state=42,
-            verbose=1,
+            verbose=0,
         )
-        odl.fit(X_lr)
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            odl.fit(X_lr)
         self.D_lr = odl.components_   # (n_atoms, d_lr)
 
-        # Étape 3 — Codes parcimonieux α pour tous les patches d'entraînement
+        # Étape 3 — Codes α parcimonieux pour tous les patches d'entraînement
         print("[SparseSR] Calcul des codes α via OMP…")
-        A = odl.transform(X_lr)       # (N, n_atoms)
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            A = odl.transform(X_lr)   # (N, n_atoms)
 
-        # Étape 4 — DHR par moindres carrés : X_hr ≈ A @ DHR.T
+        # Étape 4 — DHR par moindres carrés : résidus ≈ A @ DHR.T
         print("[SparseSR] Apprentissage DHR (moindres carrés)…")
-        Z, _, _, _ = np.linalg.lstsq(A, X_hr, rcond=None)  # Z : (n_atoms, d_hr)
-        self.D_hr = Z.T                                      # (d_hr, n_atoms)
+        Z, _, _, _ = np.linalg.lstsq(A, X_res, rcond=None)
+        self.D_hr  = Z.T              # (d_hr, n_atoms)
 
         print("[SparseSR] Entraînement terminé.")
         return self
@@ -140,43 +162,49 @@ class SparseSR:
     # ── Inférence ─────────────────────────────────────────────────────────────
 
     def predict(self, lr_img: np.ndarray) -> np.ndarray:
-        """Reconstruit l'image SR depuis lr_img par sparse coding patch par patch."""
+        """Reconstruit l'image SR = bicubique(LR) + résidu sparse."""
         assert self.D_lr is not None, "Appeler fit() ou load() avant predict()."
 
         lr_gray = _to_gray(lr_img).astype(np.float32)
         h, w    = lr_gray.shape
         ph      = self.patch_size
-        ph_hr   = ph * self.scale
         H, W    = h * self.scale, w * self.scale
 
-        output  = np.zeros((H, W), dtype=np.float32)
-        weights = np.zeros((H, W), dtype=np.float32)
+        # Baseline bicubique — sortie sans résidu appris
+        bicubic = cv2.resize(lr_gray, (W, H), interpolation=cv2.INTER_CUBIC)
 
-        # Extraction vectorisée de tous les patches LR
+        residual = np.zeros((H, W), dtype=np.float32)
+        weights  = np.zeros((H, W), dtype=np.float32)
+
+        # Extraction vectorisée des features LR
         positions, feats = [], []
         for y in range(0, h - ph + 1, self.stride_infer):
             for x in range(0, w - ph + 1, self.stride_infer):
-                feats.append(_sobel_features(lr_gray[y:y + ph, x:x + ph]))
+                feats.append(_lr_features(lr_gray[y:y + ph, x:x + ph]))
                 positions.append((y, x))
 
         X = np.array(feats, dtype=np.float32)   # (N_patches, d_lr)
 
-        # OMP vectorisé : α* = OMP(DLR, features)
-        # orthogonal_mp(X=D_lr.T, y=X.T) → (n_atoms, N_patches)
-        A = orthogonal_mp(self.D_lr.T, X.T, n_nonzero_coefs=self.n_nonzero)
+        # OMP vectorisé : α* = OMP(DLR, X)
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            A = orthogonal_mp(self.D_lr.T, X.T, n_nonzero_coefs=self.n_nonzero)
 
-        # Reconstruction : p̂HR = DHR · α*
-        HR_patches = self.D_hr @ A   # (d_hr, N_patches)
+        # Résidus prédits 8×8 (même taille que le patch LR)
+        RES_patches = np.clip(self.D_hr @ A, -0.25, 0.25)   # (ph², N_patches)
 
-        # Réassemblage avec moyenne pondérée sur les zones de chevauchement
+        # Réassemblage : résidu placé à l'origine du patch HR (couverture complète)
         for i, (y, x) in enumerate(positions):
-            hr_patch = np.clip(HR_patches[:, i] * 255, 0, 255).reshape(ph_hr, ph_hr)
+            res_patch = RES_patches[:, i].reshape(ph, ph)
             y_hr, x_hr = y * self.scale, x * self.scale
-            output [y_hr:y_hr + ph_hr, x_hr:x_hr + ph_hr] += hr_patch
-            weights[y_hr:y_hr + ph_hr, x_hr:x_hr + ph_hr] += 1.0
+            if y_hr + ph <= H and x_hr + ph <= W:
+                residual[y_hr:y_hr + ph, x_hr:x_hr + ph] += res_patch
+                weights [y_hr:y_hr + ph, x_hr:x_hr + ph] += 1.0
 
         weights = np.maximum(weights, 1)
-        out_gray = np.clip(output / weights, 0, 255).astype(np.uint8)
+        output  = bicubic + (residual / weights) * 128.0
+        out_gray = np.clip(output, 0, 255).astype(np.uint8)
 
         return cv2.cvtColor(out_gray, cv2.COLOR_GRAY2BGR) if lr_img.ndim == 3 else out_gray
 

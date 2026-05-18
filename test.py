@@ -1,7 +1,10 @@
-"""Test sparse coding SR — entraînement + évaluation visuelle. Non versionné."""
+"""Test sparse coding SR — évaluation sur nos frames vidéo. Non versionné.
+
+Pré-requis : entraîner le modèle sur DIV2K avant de lancer ce script.
+    python train/train_sparse.py
+"""
 import sys
 import cv2
-
 import matplotlib.pyplot as plt
 from pathlib import Path
 
@@ -13,8 +16,7 @@ import methods.level4_ml_classic as l4
 
 # ── Paramètres ────────────────────────────────────────────────────────────────
 VIDEO_ID     = "33mqqm4QlJ8"
-N_TRAIN      = 20    # frames pour entraîner
-N_TEST       = 5     # frames pour évaluer
+N_TEST       = 5
 SPARSE_MODEL = Path(__file__).parent / "train" / "sparse_sr.joblib"
 
 scale    = VIDEO_SCALE[VIDEO_ID]
@@ -24,32 +26,21 @@ lr_files = sorted(lr_root.glob("*.png"))
 
 RESULTS_VISUALS_DIR.mkdir(parents=True, exist_ok=True)
 
+# ── Vérification modèle ───────────────────────────────────────────────────────
+if not SPARSE_MODEL.exists():
+    print(f"[test] Modèle absent : {SPARSE_MODEL}")
+    print("[test] Lancer d'abord : python train/train_sparse.py")
+    sys.exit(1)
 
-# ── 1. Entraînement si modèle absent ─────────────────────────────────────────
-def train():
-    lr_imgs, hr_imgs = [], []
-    for lr_f in lr_files[:N_TRAIN]:
-        lr = cv2.imread(str(lr_f))
-        hr = cv2.imread(str(hr_root / lr_f.name))
-        if lr is not None and hr is not None:
-            lr_imgs.append(lr)
-            hr_imgs.append(hr)
-
-    model = l4.SparseSR(
-        n_atoms=128, patch_size=8, stride_train=6,
-        stride_infer=2, n_nonzero=8, scale=scale, max_patches=30_000,
-    )
-    model.fit(lr_imgs, hr_imgs)
-    model.save(SPARSE_MODEL)
+model = l4.SparseSR(scale=scale).load(SPARSE_MODEL)
+print(f"[test] Modèle chargé : {SPARSE_MODEL}")
 
 
-# ── 2. Évaluation PSNR / SSIM ────────────────────────────────────────────────
+# ── 1. Évaluation PSNR / SSIM ────────────────────────────────────────────────
 def evaluate():
-    model = l4.SparseSR(scale=scale).load(SPARSE_MODEL)
-
-    print(f"\n{'Frame':<12} {'Bicubic PSNR':>13} {'Sparse PSNR':>12} {'Δ PSNR':>8}")
-    print("-" * 48)
-    for lr_f in lr_files[N_TRAIN:N_TRAIN + N_TEST]:
+    print(f"\n{'Frame':<16} {'Bicubic PSNR':>13} {'Sparse PSNR':>12} {'Δ PSNR':>8}")
+    print("-" * 52)
+    for lr_f in lr_files[:N_TEST]:
         lr = cv2.imread(str(lr_f))
         hr = cv2.imread(str(hr_root / lr_f.name))
 
@@ -58,24 +49,23 @@ def evaluate():
 
         p_bic = psnr(hr, bic)
         p_spa = psnr(hr, spa)
-        print(f"{lr_f.name:<12} {p_bic:>13.2f} {p_spa:>12.2f} {p_spa - p_bic:>+8.2f}")
+        print(f"{lr_f.name:<16} {p_bic:>13.2f} {p_spa:>12.2f} {p_spa - p_bic:>+8.2f}")
 
 
-# ── 3. Comparaison visuelle sur un patch ─────────────────────────────────────
-def save_visual(frame_idx: int = N_TRAIN):
+# ── 2. Comparaison visuelle sur un patch ─────────────────────────────────────
+def save_visual(frame_idx: int = 0):
     lr_f = lr_files[frame_idx]
     lr   = cv2.imread(str(lr_f))
     hr   = cv2.imread(str(hr_root / lr_f.name))
 
-    model = l4.SparseSR(scale=scale).load(SPARSE_MODEL)
-    bic   = l1.upscale(lr, scale, "bicubic")
-    spa   = model.predict(lr)
+    bic = l1.upscale(lr, scale, "bicubic")
+    spa = model.predict(lr)
 
-    # Patch centré
     H, W  = hr.shape[:2]
     py, px, ph, pw = H // 3, W // 3, 200, 200
 
-    def crop(img): return cv2.cvtColor(img[py:py+ph, px:px+pw], cv2.COLOR_BGR2RGB)
+    def crop(img):
+        return cv2.cvtColor(img[py:py+ph, px:px+pw], cv2.COLOR_BGR2RGB)
 
     fig, axes = plt.subplots(1, 3, figsize=(12, 4.5))
     fig.suptitle(f"Sparse coding SR (×{scale}) — {lr_f.name}", fontsize=12, fontweight="bold")
@@ -94,16 +84,12 @@ def save_visual(frame_idx: int = N_TRAIN):
     plt.tight_layout()
     out = RESULTS_VISUALS_DIR / f"sparse_patch_{VIDEO_ID}.png"
     plt.savefig(str(out), dpi=150, bbox_inches="tight")
-    print(f"Image → {out}")
+    print(f"\nImage → {out}")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    if not SPARSE_MODEL.exists():
-        print("=== Entraînement sparse coding ===")
-        train()
-
-    print("=== Évaluation ===")
+    print("=== Évaluation sur frames vidéo ===")
     evaluate()
 
     print("\n=== Comparaison visuelle ===")

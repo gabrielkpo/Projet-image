@@ -5,7 +5,7 @@ ROOT     = Path(__file__).parent
 # ── Données brutes (vidéos source) ───────────────────────────────────────────
 DATA_DIR  = ROOT / "data"
 RAW_DIR   = DATA_DIR / "raw"
-DIV2K_DIR = DATA_DIR / "div2k"      # → placer DIV2K_train_HR/ ici
+DIV2K_DIR = ROOT / "div2k"          # → DIV2K_train_HR/ à la racine du projet
 
 # ── Benchmark sparse (1 fps, toutes durées) ── utilisé par benchmark/run_all.py
 FRAMES_HR_DIR        = DATA_DIR / "frames_hr"
