@@ -7,19 +7,23 @@ venv/
 env/
 *.egg-info/
 
-# Données (volumineuses, non versionnées)
+# Données volumineuses (non versionnées)
 data/raw/
 data/frames_hr/
 data/frames_lr/
 
-# Poids des modèles
+# Runs (clips, frames SR, vidéos reconstruites)
+runs/
+
+# Résultats benchmark et visuels
+results/
+
+# Poids des modèles entraînés
 train/*.pth
 train/*.pt
 
-# Résultats générés
-benchmark/results/*.csv
-benchmark/results/*.png
-benchmark/results/*.jpg
+# Script de test local
+test.py
 
 # Jupyter
 .ipynb_checkpoints/
@@ -29,6 +33,3 @@ benchmark/results/*.jpg
 
 # CodeCarbon
 emissions.csv
-
-# Script de test local (non partagé)
-test.py
