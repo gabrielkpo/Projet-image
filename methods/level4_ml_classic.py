@@ -117,7 +117,7 @@ class SparseSR:
             n_components=self.n_atoms,
             transform_algorithm="omp",
             transform_n_nonzero_coefs=self.n_nonzero,
-            n_iter=500,
+            max_iter=500,
             batch_size=256,
             random_state=42,
             verbose=1,
@@ -183,6 +183,7 @@ class SparseSR:
     # ── Sauvegarde / Chargement ───────────────────────────────────────────────
 
     def save(self, path: Path | str):
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
         joblib.dump({k: getattr(self, k) for k in
                      ("D_lr", "D_hr", "n_atoms", "patch_size",
                       "n_nonzero", "scale", "stride_train", "stride_infer")}, path)

@@ -19,7 +19,7 @@ import methods.level2_frequency as l2
 import methods.level3_denoising as l3
 import methods.level4_ml_classic as l4
 
-SPARSE_MODEL = Path(__file__).parent.parent / "train" / "sparse_sr.joblib"
+SPARSE_MODEL = Path(__file__).resolve().parent.parent / "train" / "sparse_sr.joblib"
 
 RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 RESULTS_VISUALS_DIR.mkdir(parents=True, exist_ok=True)
