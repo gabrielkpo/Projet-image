@@ -24,16 +24,28 @@ def fft_zeropad(img: np.ndarray, scale: int) -> np.ndarray:
 
 
 def dwt_upscale(img: np.ndarray, scale: int, wavelet: str = "haar") -> np.ndarray:
-    """Upscaling par extension de sous-bandes DWT."""
+    """Upscaling par montée en résolution dans l'espace ondelette.
+
+    Stratégie : DWT 1 niveau → upscaler chaque sous-bande (LL, LH, HL, HH)
+    par `scale` → IDWT → sortie à résolution ×scale.
+    LL est upscalé en bicubique (contenu basse fréquence) ;
+    les sous-bandes de détail sont upscalées en bilinéaire.
+    """
     def _upscale_channel(channel: np.ndarray) -> np.ndarray:
-        levels = int(np.log2(scale))
-        coeffs = pywt.wavedec2(channel.astype(float), wavelet, level=levels)
-        # on étend les coefficients de détail à zéro (super-résolution naïve)
-        new_coeffs = [coeffs[0]]
-        for detail in coeffs[1:]:
-            new_coeffs.append(tuple(np.zeros_like(d) for d in detail))
-        rec = pywt.waverec2(new_coeffs, wavelet)
-        return rec[:channel.shape[0] * scale, :channel.shape[1] * scale]
+        h, w = channel.shape
+        LL, (LH, HL, HH) = pywt.dwt2(channel.astype(float), wavelet)
+
+        # upscaler chaque sous-bande par `scale` depuis sa taille réelle
+        # (les ondelettes à filtre long produisent des sous-bandes légèrement
+        # plus grandes que h//2, il ne faut pas fixer th/tw à l'avance)
+        sh, sw = LL.shape[0] * scale, LL.shape[1] * scale
+        LL_up = cv2.resize(LL, (sw, sh), interpolation=cv2.INTER_CUBIC)
+        LH_up = cv2.resize(LH, (sw, sh), interpolation=cv2.INTER_LINEAR)
+        HL_up = cv2.resize(HL, (sw, sh), interpolation=cv2.INTER_LINEAR)
+        HH_up = cv2.resize(HH, (sw, sh), interpolation=cv2.INTER_LINEAR)
+
+        rec = pywt.idwt2((LL_up, (LH_up, HL_up, HH_up)), wavelet)
+        return rec[: h * scale, : w * scale]
 
     if img.ndim == 2:
         out = _upscale_channel(img)
@@ -45,6 +57,7 @@ def dwt_upscale(img: np.ndarray, scale: int, wavelet: str = "haar") -> np.ndarra
 
 def run_all(img: np.ndarray, scale: int) -> dict[str, np.ndarray]:
     return {
-        "fft_zeropad": fft_zeropad(img, scale),
-        "dwt_upscale":  dwt_upscale(img, scale),
+        "fft_zeropad":    fft_zeropad(img, scale),
+        "dwt_haar":       dwt_upscale(img, scale, wavelet="haar"),
+        "dwt_db2":        dwt_upscale(img, scale, wavelet="db2"),
     }
