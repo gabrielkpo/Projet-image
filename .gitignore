@@ -29,3 +29,6 @@ benchmark/results/*.jpg
 
 # CodeCarbon
 emissions.csv
+
+# Script de test local (non partagé)
+test.py
