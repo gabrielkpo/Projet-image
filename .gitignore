@@ -12,6 +12,12 @@ data/raw/
 data/frames_hr/
 data/frames_lr/
 
+# DIV2K dataset (racine ou sous data/)
+div2k/
+DIV2K*/
+data/div2k/
+data/DIV2K*/
+
 # Runs (clips, frames SR, vidéos reconstruites)
 runs/
 

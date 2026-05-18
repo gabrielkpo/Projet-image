@@ -19,6 +19,8 @@ import methods.level2_frequency as l2
 import methods.level3_denoising as l3
 import methods.level4_ml_classic as l4
 
+SPARSE_MODEL = Path(__file__).parent.parent / "train" / "sparse_sr.joblib"
+
 RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 RESULTS_VISUALS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -58,6 +60,12 @@ def benchmark_method(name: str, fn, pairs: list) -> dict:
     }
 
 
+def _sparse_method() -> dict:
+    """Ajoute sparse_sr au benchmark si le modèle est entraîné."""
+    print("  [sparse_sr] Modèle trouvé — ajout au benchmark.")
+    return {"sparse_sr": lambda img, s: l4.sparse_sr(img, s, model_path=SPARSE_MODEL)}
+
+
 def main():
     pairs = collect_frame_pairs()
     if not pairs:
@@ -68,15 +76,18 @@ def main():
     print(f"{len(pairs)} paires trouvées — facteurs {scales}")
 
     methods = {
+        # Niveau 1 — interpolation classique
         "bicubic":      lambda img, s: l1.upscale(img, s, "bicubic"),
-        "bilinear":     lambda img, s: l1.upscale(img, s, "bilinear"),
         "lanczos":      lambda img, s: l1.upscale(img, s, "lanczos"),
+        # Niveau 1 — post-traitements image
+        "bilateral_sr": lambda img, s: l3.bilateral_sr(img, s),
+        "nlm_sr":       lambda img, s: l3.nlm_sr(img, s),
+        # Niveau 2 — domaine fréquentiel
         "fft_zeropad":  lambda img, s: l2.fft_zeropad(img, s),
         "dwt_haar":     lambda img, s: l2.dwt_upscale(img, s, wavelet="haar"),
         "dwt_db2":      lambda img, s: l2.dwt_upscale(img, s, wavelet="db2"),
-        "bilateral_sr": lambda img, s: l3.bilateral_sr(img, s),
-        "nlm_sr":       lambda img, s: l3.nlm_sr(img, s),
-        "pca_sr":       lambda img, s: l4.pca_sr(img, s),
+        # Niveau 3 — sparse coding (nécessite train/train_sparse.py)
+        **(_sparse_method() if SPARSE_MODEL.exists() else {}),
     }
 
     rows = []
