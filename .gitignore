@@ -22,8 +22,6 @@ results/
 train/*.pth
 train/*.pt
 
-# Script de test local
-test.py
 
 # Jupyter
 .ipynb_checkpoints/
