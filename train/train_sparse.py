@@ -1,3 +1,4 @@
+import warnings; warnings.filterwarnings("ignore")  # noqa: E402
 """Entraînement du Sparse Coding SR.
 
 Sources disponibles :
@@ -70,7 +71,7 @@ def _degrade(hr_img, scale: int):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--source",     choices=["div2k", "frames"], default="div2k")
+    parser.add_argument("--source",     choices=["div2k", "frames", "combined"], default="div2k")
     parser.add_argument("--n_imgs",     type=int, default=100, help="Nb images DIV2K (ignoré si --source frames)")
     parser.add_argument("--n_atoms",    type=int, default=256)
     parser.add_argument("--n_nonzero",  type=int, default=3)
@@ -80,6 +81,11 @@ def main():
     if args.source == "frames":
         print("[train_sparse] Source : frames benchmark (1 FPS)…")
         pairs = load_frames_pairs()
+    elif args.source == "combined":
+        scale = SCALE_FACTOR
+        print(f"[train_sparse] Source : DIV2K ({args.n_imgs} images) + frames benchmark…")
+        pairs = load_div2k_pairs(args.n_imgs, scale) + load_frames_pairs()
+        print(f"[train_sparse] {len(pairs)} paires au total.")
     else:
         scale = SCALE_FACTOR
         print(f"[train_sparse] Source : DIV2K ({args.n_imgs} images, ×{scale})…")

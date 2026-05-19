@@ -1,29 +1,35 @@
 """Niveau 3 — Machine Learning classique : sparse coding sur patches LR/HR."""
+import warnings
+warnings.filterwarnings("ignore")
 import numpy as np
 import cv2
 import joblib
 from pathlib import Path
 from sklearn.decomposition import MiniBatchDictionaryLearning
-from sklearn.linear_model import orthogonal_mp
+from sklearn.linear_model import orthogonal_mp, Ridge
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Utilitaires partagés
+# Utilitaires
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _to_gray(img: np.ndarray) -> np.ndarray:
-    return cv2.cvtColor(img, cv2.COLOR_BGR2GRAY) if img.ndim == 3 else img
+def _to_y(img: np.ndarray) -> np.ndarray:
+    """Canal Y (luma YCrCb, BT.601) — même formule que BGR2GRAY."""
+    return cv2.cvtColor(img, cv2.COLOR_BGR2YCrCb)[:, :, 0] if img.ndim == 3 else img
 
 
 def _lr_features(patch: np.ndarray) -> np.ndarray:
     """
-    Features brutes du patch LR : pixels normalisés, moyenne soustraite.
-
-    Plus robuste que Sobel quand les données d'entraînement sont peu diversifiées
-    (quelques frames d'une seule vidéo). Avec DIV2K on peut revenir aux Sobel.
+    Descripteur Yang et al. (2010) : gradients ordre 1 et 2 (Sobel).
+    Invariant à la composante DC — cohérent avec le résidu HF à prédire.
     """
-    flat = patch.astype(np.float32).flatten() / 255.0
-    return flat - flat.mean()
+    p   = patch.astype(np.float32) / 255.0
+    gx  = cv2.Sobel(p, cv2.CV_32F, 1, 0, ksize=3)
+    gy  = cv2.Sobel(p, cv2.CV_32F, 0, 1, ksize=3)
+    gxx = cv2.Sobel(p, cv2.CV_32F, 2, 0, ksize=3)
+    gyy = cv2.Sobel(p, cv2.CV_32F, 0, 2, ksize=3)
+    return np.concatenate([gx.flatten(), gy.flatten(),
+                           gxx.flatten(), gyy.flatten()])
 
 
 def _extract_pairs(lr_gray: np.ndarray, hr_gray: np.ndarray,
@@ -32,28 +38,32 @@ def _extract_pairs(lr_gray: np.ndarray, hr_gray: np.ndarray,
     """
     Extrait les paires (features LR, résidu HR).
 
-    Résidu HR = HR_patch - bicubique(LR_patch) : haute fréquence à apprendre.
-    Garantie : patch homogène → features ≈ 0 → α ≈ 0 → sortie = bicubique.
+    Un patch LR de taille p×p couvre une région HR de taille (p·scale)×(p·scale).
+    Résidu = HR_patch - bic_global_patch — bicubique calculée sur l'image COMPLÈTE,
+    identique à celle utilisée à l'inférence (même convention de centrage OpenCV).
+    Garantie : patch lisse → features ≈ 0 → α ≈ 0 → résidu ≈ 0 → sortie = bicubique.
     """
-    h, w = lr_gray.shape
+    h, w  = lr_gray.shape
+    H, W  = h * scale, w * scale
+    ph_hr = patch_size * scale
+
+    # Bicubique globale — même calcul qu'à l'inférence pour éviter le décalage sub-pixel
+    bic_global = cv2.resize(lr_gray.astype(np.float32), (W, H),
+                            interpolation=cv2.INTER_CUBIC)
+
     lr_feats, hr_residuals = [], []
 
     for y in range(0, h - patch_size + 1, stride):
         for x in range(0, w - patch_size + 1, stride):
             lr_patch = lr_gray[y:y + patch_size, x:x + patch_size]
-            hr_patch = hr_gray[y * scale:(y + patch_size) * scale,
-                                x * scale:(x + patch_size) * scale]
+            y_hr, x_hr = y * scale, x * scale
+            hr_patch  = hr_gray[y_hr:y_hr + ph_hr, x_hr:x_hr + ph_hr]
+            bic_patch = bic_global[y_hr:y_hr + ph_hr, x_hr:x_hr + ph_hr]
 
-            # Patch HR 8×8 aligné sur l'origine du patch LR (ratio 1:1)
-            hr_patch = hr_gray[y * scale : y * scale + patch_size,
-                                x * scale : x * scale + patch_size]
+            if hr_patch.shape != (ph_hr, ph_hr):
+                continue  # patch de bord incomplet
 
-            # Baseline bicubique à l'origine pour calculer le résidu
-            lr_up      = cv2.resize(lr_patch.astype(np.float32),
-                                    (patch_size * scale, patch_size * scale),
-                                    interpolation=cv2.INTER_CUBIC)
-            bic_center = lr_up[0:patch_size, 0:patch_size]
-            residual   = (hr_patch.astype(np.float32) - bic_center) / 128.0
+            residual = (hr_patch.astype(np.float32) - bic_patch) / 128.0
 
             lr_feats.append(_lr_features(lr_patch))
             hr_residuals.append(residual.flatten())
@@ -70,25 +80,25 @@ class SparseSR:
     Super-résolution par sparse coding avec dictionnaires couplés DLR et DHR.
 
     Formulation résidu (Yang et al., 2010) :
-        DLR apprend les descripteurs Sobel des patches LR
-        DHR apprend les résidus haute-fréquence  HR - bicubique(LR)
+        DLR apprend les descripteurs gradient (Sobel) des patches LR
+        DHR apprend les résidus haute-fréquence HR - bicubique(LR)
 
-    Garantie : si le patch est lisse (Sobel ≈ 0), α ≈ 0 et la sortie
-    est égale au bicubique — degradation gracieuse assurée.
+    Un patch LR p×p correspond à une région HR (p·scale)×(p·scale).
+    Garantie de dégradation gracieuse : zones lisses → résidu ≈ 0 → sortie = bicubique.
 
     Apprentissage :
-        1. Extraction des descripteurs Sobel LR et des résidus HR
+        1. Extraction des descripteurs gradient LR et des résidus HR complets
         2. DLR appris par MiniBatchDictionaryLearning (ODL)
         3. Codes α calculés par OMP sur DLR
-        4. DHR appris par moindres carrés : DHR = X_residus · pinv(A)
+        4. DHR appris par Ridge regression : DHR = ridge.fit(A, X_res)
 
     Inférence :
-        α* = OMP(DLR, sobel(LR_patch))
-        SR = bicubique(LR) + DHR · α*  (résidu ajouté à la baseline)
+        α* = OMP(DLR, grad(LR_patch))
+        SR = bicubique(LR) + DHR · α*
     """
 
     def __init__(self, n_atoms: int = 256, patch_size: int = 8,
-                 stride_train: int = 4, stride_infer: int = 2,
+                 stride_train: int = 4, stride_infer: int = 4,
                  n_nonzero: int = 3, scale: int = 4,
                  max_patches: int = 60_000):
         self.n_atoms      = n_atoms
@@ -98,22 +108,21 @@ class SparseSR:
         self.n_nonzero    = n_nonzero
         self.scale        = scale
         self.max_patches  = max_patches
-        self.D_lr = None  # (n_atoms, d_lr)  — convention sklearn
-        self.D_hr = None  # (d_hr,   n_atoms)
+        self.D_lr = None  # (n_atoms, d_lr)
+        self.D_hr = None  # (d_hr,   n_atoms)   d_hr = (patch_size * scale)²
 
     # ── Entraînement ─────────────────────────────────────────────────────────
 
     def fit(self, lr_imgs: list, hr_imgs: list) -> "SparseSR":
         """Apprend DLR et DHR à partir de paires d'images (LR, HR)."""
 
-        # Étape 1 — Extraction des descripteurs LR et résidus HR
-        # Arrêt anticipé dès que max_patches est atteint pour éviter l'OOM
+        # Étape 1 — Extraction : arrêt anticipé pour éviter l'OOM
         print(f"[SparseSR] Extraction des patches ({len(lr_imgs)} images)…")
         all_lr, all_hr = [], []
         total = 0
         for lr, hr in zip(lr_imgs, hr_imgs):
             lf, hr_res = _extract_pairs(
-                _to_gray(lr), _to_gray(hr),
+                _to_y(lr), _to_y(hr),
                 self.patch_size, self.stride_train, self.scale,
             )
             all_lr.append(lf)
@@ -124,10 +133,10 @@ class SparseSR:
 
         X_lr  = np.vstack(all_lr)[:self.max_patches]
         X_res = np.vstack(all_hr)[:self.max_patches]
+        print(f"[SparseSR] {len(X_lr):,} patches extraits.")
 
-        print(f"[SparseSR] {len(X_lr):,} patches — apprentissage DLR (ODL)…")
-
-        # Étape 2 — ODL sur les descripteurs Sobel LR
+        # Étape 2 — ODL : apprentissage du dictionnaire DLR
+        print("[SparseSR] Apprentissage DLR (ODL)…")
         odl = MiniBatchDictionaryLearning(
             n_components=self.n_atoms,
             alpha=1.0,
@@ -138,23 +147,26 @@ class SparseSR:
             random_state=42,
             verbose=0,
         )
-        import warnings
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             odl.fit(X_lr)
         self.D_lr = odl.components_   # (n_atoms, d_lr)
 
-        # Étape 3 — Codes α parcimonieux pour tous les patches d'entraînement
-        print("[SparseSR] Calcul des codes α via OMP…")
-        import warnings
+        # Étape 3 — Codes α parcimonieux via OMP
+        print("[SparseSR] Calcul des codes α (OMP)…")
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             A = odl.transform(X_lr)   # (N, n_atoms)
 
-        # Étape 4 — DHR par moindres carrés : résidus ≈ A @ DHR.T
-        print("[SparseSR] Apprentissage DHR (moindres carrés)…")
-        Z, _, _, _ = np.linalg.lstsq(A, X_res, rcond=None)
-        self.D_hr  = Z.T              # (d_hr, n_atoms)
+        # Étape 4 — DHR par Ridge regression (robuste au conditionnement sparse)
+        print("[SparseSR] Apprentissage DHR (Ridge)…")
+        ridge = Ridge(alpha=1.0, fit_intercept=False)
+        ridge.fit(A, X_res)
+        self.D_hr = ridge.coef_       # (d_hr, n_atoms) — convention sklearn multi-output
+
+        expected_d_hr = (self.patch_size * self.scale) ** 2
+        assert self.D_hr.shape == (expected_d_hr, self.n_atoms), \
+            f"D_hr shape {self.D_hr.shape} ≠ ({expected_d_hr}, {self.n_atoms})"
 
         print("[SparseSR] Entraînement terminé.")
         return self
@@ -162,51 +174,61 @@ class SparseSR:
     # ── Inférence ─────────────────────────────────────────────────────────────
 
     def predict(self, lr_img: np.ndarray) -> np.ndarray:
-        """Reconstruit l'image SR = bicubique(LR) + résidu sparse."""
+        """SR sur le canal Y (luma) + upscale bicubique des canaux chroma."""
         assert self.D_lr is not None, "Appeler fit() ou load() avant predict()."
 
-        lr_gray = _to_gray(lr_img).astype(np.float32)
+        is_color = (lr_img.ndim == 3)
+        if is_color:
+            ycrcb = cv2.cvtColor(lr_img, cv2.COLOR_BGR2YCrCb)
+            lr_y, lr_cr, lr_cb = cv2.split(ycrcb)
+        else:
+            lr_y = lr_img
+
+        lr_gray = lr_y.astype(np.float32)
         h, w    = lr_gray.shape
         ph      = self.patch_size
+        ph_hr   = ph * self.scale
         H, W    = h * self.scale, w * self.scale
 
-        # Baseline bicubique — sortie sans résidu appris
-        bicubic = cv2.resize(lr_gray, (W, H), interpolation=cv2.INTER_CUBIC)
-
+        bicubic  = cv2.resize(lr_gray, (W, H), interpolation=cv2.INTER_CUBIC)
         residual = np.zeros((H, W), dtype=np.float32)
         weights  = np.zeros((H, W), dtype=np.float32)
 
-        # Extraction vectorisée des features LR
         positions, feats = [], []
         for y in range(0, h - ph + 1, self.stride_infer):
             for x in range(0, w - ph + 1, self.stride_infer):
                 feats.append(_lr_features(lr_gray[y:y + ph, x:x + ph]))
                 positions.append((y, x))
 
-        X = np.array(feats, dtype=np.float32)   # (N_patches, d_lr)
+        X = np.array(feats, dtype=np.float32)
 
-        # OMP vectorisé : α* = OMP(DLR, X)
-        import warnings
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")
             A = orthogonal_mp(self.D_lr.T, X.T, n_nonzero_coefs=self.n_nonzero)
 
-        # Résidus prédits 8×8 (même taille que le patch LR)
-        RES_patches = np.clip(self.D_hr @ A, -0.25, 0.25)   # (ph², N_patches)
+        RES_patches = self.D_hr @ A
 
-        # Réassemblage : résidu placé à l'origine du patch HR (couverture complète)
+        # Gating : annule le résidu sur les patches sans structure.
+        # OMP force n_nonzero atomes même sur patch plat → faux détail sinon.
+        patch_energy = np.linalg.norm(X, axis=1)
+        RES_patches[:, patch_energy < np.median(patch_energy) / 4] = 0.0
+
         for i, (y, x) in enumerate(positions):
-            res_patch = RES_patches[:, i].reshape(ph, ph)
             y_hr, x_hr = y * self.scale, x * self.scale
-            if y_hr + ph <= H and x_hr + ph <= W:
-                residual[y_hr:y_hr + ph, x_hr:x_hr + ph] += res_patch
-                weights [y_hr:y_hr + ph, x_hr:x_hr + ph] += 1.0
+            if y_hr + ph_hr <= H and x_hr + ph_hr <= W:
+                res_patch = RES_patches[:, i].reshape(ph_hr, ph_hr)
+                residual[y_hr:y_hr + ph_hr, x_hr:x_hr + ph_hr] += res_patch
+                weights [y_hr:y_hr + ph_hr, x_hr:x_hr + ph_hr] += 1.0
 
         weights = np.maximum(weights, 1)
-        output  = bicubic + (residual / weights) * 128.0
-        out_gray = np.clip(output, 0, 255).astype(np.uint8)
+        hr_y    = np.clip(bicubic + (residual / weights) * 128.0, 0, 255).astype(np.uint8)
 
-        return cv2.cvtColor(out_gray, cv2.COLOR_GRAY2BGR) if lr_img.ndim == 3 else out_gray
+        if not is_color:
+            return hr_y
+
+        hr_cr = cv2.resize(lr_cr, (W, H), interpolation=cv2.INTER_CUBIC)
+        hr_cb = cv2.resize(lr_cb, (W, H), interpolation=cv2.INTER_CUBIC)
+        return cv2.cvtColor(cv2.merge([hr_y, hr_cr, hr_cb]), cv2.COLOR_YCrCb2BGR)
 
     # ── Sauvegarde / Chargement ───────────────────────────────────────────────
 
