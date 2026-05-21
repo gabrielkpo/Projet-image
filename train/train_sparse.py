@@ -1,4 +1,3 @@
-import warnings; warnings.filterwarnings("ignore")  # noqa: E402
 """Entraînement du Sparse Coding SR.
 
 Sources disponibles :

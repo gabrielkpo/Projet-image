@@ -2,6 +2,7 @@ numpy
 opencv-python
 scikit-image
 scikit-learn
+joblib
 torch
 torchvision
 Pillow

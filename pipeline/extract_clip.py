@@ -1,10 +1,10 @@
 """Extrait CLIP_DURATION secondes d'une vidéo à son FPS natif.
 
 Structure de sortie :
-  runs/<video_id>/frames_hr/frame_00001.png ...
-  runs/<video_id>/frames_hr/fps.txt           ← FPS natif
-  runs/<video_id>/frames_hr/start.txt         ← point de départ
-  runs/<video_id>/frames_lr/                  ← dégradation bicubique
+  data_ytb_24fps/<video_id>/frames_hr/frame_00001.png ...
+  data_ytb_24fps/<video_id>/frames_hr/fps.txt           ← FPS natif
+  data_ytb_24fps/<video_id>/frames_hr/start.txt         ← point de départ
+  data_ytb_24fps/<video_id>/frames_lr/                  ← dégradation bicubique
 
 Usage :
   python pipeline/extract_clip.py
@@ -15,6 +15,8 @@ import argparse
 import subprocess
 import sys
 from pathlib import Path
+
+import cv2
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import RAW_DIR, RUNS_DIR, CLIP_DURATION, VIDEO_SCALE, SCALE_FACTOR
@@ -82,7 +84,6 @@ def extract_clip(video_id: str, start: float = 0.0) -> float:
 
 def degrade_clip(video_id: str) -> None:
     """Génère les frames LR (dégradation bicubique) pour le clip."""
-    import cv2
     hr_dir = RUNS_DIR / video_id / "frames_hr"
     lr_dir = RUNS_DIR / video_id / "frames_lr"
     lr_dir.mkdir(parents=True, exist_ok=True)

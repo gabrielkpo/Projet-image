@@ -3,22 +3,26 @@ from pathlib import Path
 ROOT     = Path(__file__).parent
 
 # ── Données brutes (vidéos source) ───────────────────────────────────────────
-DATA_DIR  = ROOT / "data"
+DATA_DIR  = ROOT / "data_ytb_1fps"
 RAW_DIR   = DATA_DIR / "raw"
-DIV2K_DIR = ROOT / "div2k"          # → DIV2K_train_HR/ à la racine du projet
+DIV2K_DIR      = ROOT / "div2k"
+DIV2K_TRAIN_HR = DIV2K_DIR / "DIV2K_train_HR"
+DIV2K_TRAIN_LR = DIV2K_DIR / "DIV2K_train_LR_bicubic_X4" / "X4"
+DIV2K_VALID_HR = DIV2K_DIR / "DIV2K_valid_HR"
+DIV2K_VALID_LR = DIV2K_DIR / "DIV2K_valid_LR_bicubic_X4" / "X4"
 
-# ── Benchmark sparse (1 fps, toutes durées) ── utilisé par benchmark/run_all.py
+# ── Benchmark (1 fps, toutes durées)
 FRAMES_HR_DIR        = DATA_DIR / "frames_hr"
 FRAMES_LR_DIR        = DATA_DIR / "frames_lr"
 FRAMES_LR_PHASE1_DIR = FRAMES_LR_DIR / "phase1_bicubic"
 FRAMES_LR_PHASE2_DIR = FRAMES_LR_DIR / "phase2_noisy"
 
-# ── Runs (clips 5s à FPS natif) ── structure par vidéo
-#    runs/<video_id>/frames_hr/
-#    runs/<video_id>/frames_lr/
-#    runs/<video_id>/frames_sr/<method>/
-#    runs/<video_id>/videos/
-RUNS_DIR = ROOT / "runs"
+# ── Clips FPS natif ── structure par vidéo
+#    data_ytb_24fps/<video_id>/frames_hr/
+#    data_ytb_24fps/<video_id>/frames_lr/
+#    data_ytb_24fps/<video_id>/frames_sr/<method>/
+#    data_ytb_24fps/<video_id>/videos/
+RUNS_DIR = ROOT / "data_ytb_24fps"
 
 # ── Résultats (benchmark + visuels) ─────────────────────────────────────────
 RESULTS_DIR         = ROOT / "results"

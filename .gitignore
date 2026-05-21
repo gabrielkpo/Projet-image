@@ -7,27 +7,24 @@ venv/
 env/
 *.egg-info/
 
-# Données volumineuses (non versionnées)
-data/raw/
-data/frames_hr/
-data/frames_lr/
+# Datasets vidéo YouTube (1 fps et 24 fps)
+data_ytb_1fps/
+data_ytb_24fps/
 
-# DIV2K dataset (racine ou sous data/)
+# DIV2K dataset
 div2k/
-DIV2K*/
-data/div2k/
-data/DIV2K*/
 
-# Runs (clips, frames SR, vidéos reconstruites)
-runs/
-
-# Résultats benchmark et visuels
-results/
+# Dataset UCF-101
+dataset_UFC101/
 
 # Poids des modèles entraînés
 train/*.pth
 train/*.pt
+train/*.joblib
+workflow/*.ckpt
 
+# Résultats benchmark et visuels
+results/
 
 # Jupyter
 .ipynb_checkpoints/

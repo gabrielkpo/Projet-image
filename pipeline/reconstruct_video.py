@@ -14,6 +14,7 @@ import cv2
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import RUNS_DIR, VIDEO_SCALE, SCALE_FACTOR
+import methods.level1_interpolation as l1
 
 
 def get_fps(video_id: str) -> float:
@@ -64,12 +65,11 @@ def frames_to_video(frames_dir: Path, output_path: Path, fps: float) -> None:
 
 def reconstruct(video_id: str, method_name: str, fn=None) -> None:
     fps      = get_fps(video_id)
-    out_path = RUNS_DIR / video_id / "videos" / f"{method_name}.mp4"
+    out_path = RUNS_DIR / video_id / "videos" / f"{video_id}_{method_name}.mp4"
 
     if method_name == "hr":
         frames_dir = RUNS_DIR / video_id / "frames_hr"
     elif method_name == "lr":
-        import methods.level1_interpolation as l1
         frames_dir = apply_sr(video_id, "lr_bicubic",
                               lambda img, s: l1.upscale(img, s, "bicubic"))
     else:
@@ -88,7 +88,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     import methods.level2_frequency as l2
-    import methods.level1_interpolation as l1
     METHOD_MAP = {
         "bicubic":     lambda img, s: l1.upscale(img, s, "bicubic"),
         "fft_zeropad": lambda img, s: l2.fft_zeropad(img, s),

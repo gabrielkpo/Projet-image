@@ -10,7 +10,6 @@ class FSRCNN(nn.Module):
     def __init__(self, scale: int = 4, d: int = 64, s: int = 16, m: int = 6) -> None:
         super().__init__()
         self.scale = scale
-
         self.feature = nn.Sequential(
             nn.Conv2d(1, d, kernel_size=5, padding=2),
             nn.PReLU(num_parameters=d),

@@ -1,11 +1,8 @@
 """Extraction de frames depuis une vidéo via ffmpeg + téléchargement yt-dlp.
 
-
-Pour lancer le code : 
-
-1. cd "/Users/gabriel/Desktop/ENSEEIHT/2A/traitement d'image/Projet_image_Gab_Thomas/green_sr"
-2. python pipeline/extract_frames.py
-
+Usage :
+    python pipeline/extract_frames.py
+    python pipeline/extract_frames.py --url <URL_YouTube> --fps 1
 """
 
 
@@ -60,7 +57,7 @@ def _parse_video_id(url: str) -> str:
 
 
 def extract_frames(video_path: Path, output_dir: Path,
-                   fps: int = EXTRACT_FPS, max_frames: int = None) -> int:
+                   fps: int = EXTRACT_FPS, max_frames: int | None = None) -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     existing = list(output_dir.glob("frame_*.png"))
