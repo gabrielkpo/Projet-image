@@ -1,4 +1,5 @@
 from pathlib import Path
+import torch
 
 ROOT     = Path(__file__).parent
 
@@ -45,9 +46,17 @@ NOISE_STD_PHASE2 = 25      # AWGN σ=25 (phase 2 uniquement)
 
 # ── Entraînement CNN ─────────────────────────────────────────────────────────
 BATCH_SIZE    = 64
-LEARNING_RATE = 1e-4
+LEARNING_RATE = 1e-3
 EPOCHS        = 50
-DEVICE        = "cpu"       # "cpu" ou "cuda"
+
+def _detect_device() -> str:
+    if torch.cuda.is_available():
+        return "cuda"
+    if torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
+
+DEVICE = _detect_device()
 
 # ── CodeCarbon ───────────────────────────────────────────────────────────────
 COUNTRY_ISO = "FRA"

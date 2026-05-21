@@ -29,9 +29,16 @@ SAD_THRESH = 1500.0
 BLOCK_SIZE = 16
 
 
-def pick_video(category: str | None, video_path: str | None) -> Path:
+def pick_video(category: str | None, video_path: str | None,
+               seed: int | None = None) -> Path:
     if video_path:
-        return Path(video_path)
+        p = Path(video_path)
+        if not p.exists():
+            print(f"[test_archive] Fichier introuvable : {p}")
+            sys.exit(1)
+        return p
+    if seed is not None:
+        random.seed(seed)
     cats = [d for d in ARCHIVE.iterdir() if d.is_dir()]
     if category:
         cats = [c for c in cats if c.name == category]
@@ -61,12 +68,13 @@ def degrade(frame: np.ndarray, scale: int) -> np.ndarray:
     return cv2.resize(frame, (w // scale, h // scale), interpolation=cv2.INTER_CUBIC)
 
 
-def main(category=None, video_path=None, sad_threshold=SAD_THRESH):
-    if not CKPT.exists():
-        print(f"[test_archive] Checkpoint introuvable : {CKPT}")
+def main(category=None, video_path=None, sad_threshold=SAD_THRESH,
+         ckpt_path=CKPT, seed=None):
+    if not ckpt_path.exists():
+        print(f"[test_archive] Checkpoint introuvable : {ckpt_path}")
         sys.exit(1)
 
-    video = pick_video(category, video_path)
+    video = pick_video(category, video_path, seed=seed)
     print(f"[test_archive] Vidéo : {video.parent.name}/{video.name}")
 
     frames_hr = extract_frames(video, N_FRAMES)
@@ -74,8 +82,9 @@ def main(category=None, video_path=None, sad_threshold=SAD_THRESH):
         print("[test_archive] Impossible de lire la vidéo.")
         sys.exit(1)
     print(f"[test_archive] {len(frames_hr)} frames extraites — résolution HR : {frames_hr[0].shape[1]}×{frames_hr[0].shape[0]}")
+    print(f"[test_archive] Checkpoint : {ckpt_path.name}")
 
-    model    = load_model(CKPT)
+    model    = load_model(ckpt_path)
     pipeline = SadFsrcnnPipeline(model, block_size=BLOCK_SIZE, sad_threshold=sad_threshold)
 
     RESULTS_VISUALS_DIR.mkdir(parents=True, exist_ok=True)
@@ -138,5 +147,10 @@ if __name__ == "__main__":
     parser.add_argument("--category",  type=str,   default=None)
     parser.add_argument("--video",     type=str,   default=None)
     parser.add_argument("--threshold", type=float, default=SAD_THRESH)
+    parser.add_argument("--ckpt",  type=Path,  default=CKPT,
+                        help="Checkpoint FSRCNN (défaut : workflow/fsrcnn_div2k.ckpt)")
+    parser.add_argument("--seed",  type=int,   default=42,
+                        help="Seed pour la sélection aléatoire de la vidéo (défaut : 42)")
     args = parser.parse_args()
-    main(args.category, args.video, args.threshold)
+    main(args.category, args.video, args.threshold,
+         ckpt_path=args.ckpt, seed=args.seed)

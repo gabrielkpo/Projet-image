@@ -17,11 +17,11 @@ div2k/
 # Dataset UCF-101
 dataset_UFC101/
 
-# Poids des modèles entraînés
+# Poids des modèles entraînés (ignorés sauf le checkpoint de référence)
 train/*.pth
 train/*.pt
 train/*.joblib
-workflow/*.ckpt
+!train/fsrcnn_div2k.ckpt
 
 # Résultats benchmark et visuels
 results/
